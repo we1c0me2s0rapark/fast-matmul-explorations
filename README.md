@@ -122,8 +122,6 @@ All runs search for rank-7 algorithms from 200 random starting points. "Exact" m
 
 **ERM overfits below 16 pairs.** With 4–12 training pairs, up to 175 of 200 unregularised runs fitted the training pairs perfectly, yet none worked on new matrices (seed 0). The error is a bilinear map with 16 degrees of freedom per output entry, so fewer pairs can't pin down the algorithm. With enough pairs, ERM performs about as well as the true risk.
 
-![Training fit vs true fit vs exact algorithms, by training set size](step4_overfitting.png)
-
 **RMSprop finds the most algorithms, and the most precise fit doesn't win.** With the regularised true risk, each at its best learning rate:
 
 | Optimiser | Best lr | Exact (exact gradient) | Exact (fresh minibatch of 128) |
@@ -134,8 +132,6 @@ All runs search for rank-7 algorithms from 200 random starting points. "Exact" m
 | Plain GD | 0.1 | 91–98 | diverges |
 
 Momentum fits the loss most precisely but finds about half as many algorithms as RMSprop, which never fits below 1e-4. Gradient noise helps the adaptive optimisers and breaks plain gradient descent. Why RMSprop does best is still an open question; one guess is that its evenly sized steps keep it from settling at messy points.
-
-![Exact algorithms per optimiser, exact gradient vs minibatches](step4_noise.png)
 
 ### How steps 3 and 4 connect to the ML course
 
