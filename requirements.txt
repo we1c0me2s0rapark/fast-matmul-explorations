@@ -1,3 +1,4 @@
 # Python 3.9 or newer
 numpy>=1.26
-torch>=2.3  # only needed for step2_gradient_search.py; 2.3+ works with NumPy 2
+torch>=2.3        # steps 2 and 3; 2.3+ works with NumPy 2
+matplotlib>=3.7   # step 3 loss-curve plot

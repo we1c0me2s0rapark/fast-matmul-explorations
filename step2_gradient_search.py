@@ -3,7 +3,7 @@ Step 2: rediscover Strassen's algorithm with gradient descent.
 
 The factor matrices U, V, W are hidden. Starting from random numbers, the
 search looks for factors whose rank-one terms rebuild the 2x2 matrix
-multiplication tensor T.
+multiplication tensor TARGET_TENSOR (T in the formula below).
 
 Phase 1 (fit)         minimise || sum_r U_r (x) V_r (x) W_r - T ||^2
 Phase 2 (discretise)  add a slowly growing penalty that pulls every entry
@@ -32,17 +32,17 @@ C_NAMES = ["c11", "c12", "c21", "c22"]
 
 
 def matmul_tensor(n: int = 2) -> torch.Tensor:
-    """T[i, j, k] = 1 if A-entry i times B-entry j contributes to C-entry k."""
+    """tensor[i, j, k] = 1 if A-entry i times B-entry j contributes to C-entry k."""
     size = n * n
-    T = torch.zeros(size, size, size)
+    tensor = torch.zeros(size, size, size)
     for r in range(n):
         for s in range(n):
             for m in range(n):
-                T[r * n + m, m * n + s, r * n + s] = 1.0
-    return T
+                tensor[r * n + m, m * n + s, r * n + s] = 1.0
+    return tensor
 
 
-T = matmul_tensor(2)
+TARGET_TENSOR = matmul_tensor(2) # the ground truth every search tries to rebuild
 
 
 def reconstruct(U: torch.Tensor, V: torch.Tensor, W: torch.Tensor) -> torch.Tensor:
@@ -55,14 +55,14 @@ def reconstruct(U: torch.Tensor, V: torch.Tensor, W: torch.Tensor) -> torch.Tens
 
 
 def fit_loss(U: torch.Tensor, V: torch.Tensor, W: torch.Tensor) -> torch.Tensor:
-    """Squared error between each rebuilt tensor and the target T.
+    """Squared error between each rebuilt tensor and TARGET_TENSOR.
 
     U, V, W have shape (restarts, N_ENTRIES, rank).
     Returns shape (restarts,): one loss value per restart.
     A loss of exactly 0 means that restart's U, V, W form a correct algorithm.
     """
     rebuilt = reconstruct(U, V, W)      # (restarts, N_ENTRIES, N_ENTRIES, N_ENTRIES)
-    error = rebuilt - T                 # T is broadcast across all restarts
+    error = rebuilt - TARGET_TENSOR     # TARGET_TENSOR is broadcast across all restarts
     squared = error ** 2                # every cell's error becomes positive
     return squared.sum(dim=(1, 2, 3))   # sum over all cells, keep the restart axis
 
@@ -96,23 +96,42 @@ def search(
         fit_steps: int,
         disc_steps: int,
         lr: float,
-        allowed: list
+        allowed: list,
+        make_optimiser=torch.optim.Adam,
+        on_step=None,
+        loss_fn=None,
+        penalty_scale=1.0
     ):
-    """Run all restarts in parallel. Returns fit losses, exactness flags and rounded factors."""
-    N_ENTRIES = T.shape[0]  # entries per matrix (n * n): rows of U, V and W
+    """Run all restarts in parallel. Returns fit losses, exactness flags and rounded factors.
+
+    make_optimiser: called as make_optimiser(params, lr=lr); Adam by default (step 3 swaps it).
+    on_step:        optional on_step(step, fits), called every step of both phases with the
+                    current training loss per restart, e.g. to record loss curves.
+    loss_fn:        training loss, called as loss_fn(U, V, W) -> (restarts,); fit_loss by default
+                    (step 4 swaps in a loss on sampled matrices). The returned fit losses and the
+                    exactness check always use fit_loss against TARGET_TENSOR.
+    penalty_scale:  multiplies the phase 2 penalty; 0 turns phase 2 into more plain fitting
+                    (step 4 uses this for its unregularised runs).
+    """
+    if loss_fn is None:
+        loss_fn = fit_loss
+    N_ENTRIES = TARGET_TENSOR.shape[0]  # entries per matrix (n * n): rows of U, V and W
     N_FACTORS = 3           # one factor matrix each for A, B and C: U, V, W
     INIT_SCALE = 0.7        # starting size of the random factors; tuned by trial
     params = [(torch.randn(restarts, N_ENTRIES, rank) * INIT_SCALE).requires_grad_() for _ in range(N_FACTORS)]
-    optimiser = torch.optim.Adam(params, lr=lr)
+    optimiser = make_optimiser(params, lr=lr)
 
     # Phase 1: plain fit
-    # Adjust U, V, W so that each restart's rebuilt tensor moves closer to T.
-    for _ in range(fit_steps):
+    # Adjust U, V, W so that each restart's rebuilt tensor moves closer to TARGET_TENSOR.
+    for step in range(fit_steps):
         optimiser.zero_grad()               # clear gradients from the previous step (they accumulate otherwise)
-        loss = fit_loss(*params).sum()      # forward pass: one loss per restart, summed into a scalar
+        fits = loss_fn(*params)             # forward pass: one loss per restart
+        loss = fits.sum()                   # summed into a scalar
                                             # summing is safe: each restart only affects its own loss
         loss.backward()                     # compute the gradient of the loss for every value in U, V, W
         optimiser.step()                    # the optimiser updates every value using its gradient
+        if on_step is not None:
+            on_step(step, fits.detach())
 
     # Record each restart's loss at the end of phase 1 (reported as "fit ok" and "best fit loss").
     # Gradients are switched off: this is only a measurement, not a training step.
@@ -121,15 +140,17 @@ def search(
 
     # Phase 2: keep fitting while slowly strengthening the pull towards allowed values
     for step in range(disc_steps):
-        strength = 0.01 * (1 + step / 100)       # penalty weight, grows over time
+        strength = penalty_scale * 0.01 * (1 + step / 100)  # penalty weight, grows over time
         optimiser.zero_grad()
 
-        current_fit = fit_loss(*params)          # (restarts,): how wrong each recipe is
+        current_fit = loss_fn(*params)           # (restarts,): how wrong each recipe is
         penalty = sum(discrete_penalty(p, allowed) for p in params)  # (restarts,): distance from allowed values, summed over U, V, W
         loss = current_fit + strength * penalty  # (restarts,): balance correctness and clean values
 
         loss.sum().backward()
         optimiser.step()
+        if on_step is not None:
+            on_step(fit_steps + step, current_fit.detach())
 
     # Round and check exactness
     # Gradients are switched off: this is only a measurement, not a training step.
@@ -137,9 +158,9 @@ def search(
         # Snap every value in U, V and W to its nearest allowed value (e.g. 0.97 -> 1)
         rounded = [round_to_allowed(p, allowed) for p in params]   # [U, V, W], each (restarts, N_ENTRIES, rank)
 
-        # Rebuild each restart's tensor from its rounded recipe and compare with T.
+        # Rebuild each restart's tensor from its rounded recipe and compare with TARGET_TENSOR.
         # == is safe here: rounded values are exact whole numbers, so no tolerance is needed.
-        matches = reconstruct(*rounded) == T                       # (restarts, N_ENTRIES, N_ENTRIES, N_ENTRIES): True/False per cell
+        matches = reconstruct(*rounded) == TARGET_TENSOR           # (restarts, N_ENTRIES, N_ENTRIES, N_ENTRIES): True/False per cell
         exact = matches.all(dim=(1, 2, 3))                         # (restarts,): True only if all cells match
 
     # fit:     phase 1 loss per restart            -> "fit ok" and "best fit loss" columns
