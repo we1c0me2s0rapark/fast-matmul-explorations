@@ -15,7 +15,7 @@ Run them in order. Each script is independent and prints its own explanation.
 | 1 | [`step1_count_and_tensor.py`](step1_count_and_tensor.py) | Counts multiplications for naive vs Strassen and shows the exponent falling from 3 to log₂7 ≈ 2.807. Then it rewrites 2×2 matrix multiplication as a 4×4×4 tensor, where an algorithm is a decomposition of that tensor into rank-one terms. |
 | 2 | [`step2_gradient_search.py`](step2_gradient_search.py) | Searches for rank-8, rank-7 and rank-6 decompositions from random starting points with gradient descent, then rounds to {-1, 0, 1} and checks whether the result is an exact algorithm. |
 | 3 | [`step3_optimiser_comparison.py`](step3_optimiser_comparison.py) | Runs the rank-7 search with plain gradient descent, momentum, RMSprop and Adam, each over a range of learning rates and from the same starting points. Compares how many exact algorithms each finds and saves their loss curves. |
-| 4 | [`step4_erm_regularisation_noise.py`](step4_erm_regularisation_noise.py) | Three experiments on the rank-7 search. A: empirical risk minimisation (ERM) on a fixed set of N random matrix pairs, with and without the whole-number regulariser; below N = 16 it overfits. B: the same comparison on the true risk (the exact tensor loss). C: whether gradient noise from a fresh minibatch every step helps each optimiser find exact algorithms. Saves `step4_overfitting.png` and `step4_noise.png`. |
+| 4 | [`step4_erm_regularisation_noise.py`](step4_erm_regularisation_noise.py) | Three experiments on the rank-7 search. A: empirical risk minimisation (ERM) on a fixed set of N random matrix pairs, with and without the whole-number regulariser; below N = 16 it overfits. B: the same comparison on the true risk (the exact tensor loss). C: whether gradient noise from a fresh minibatch every step helps each optimiser find exact algorithms. Runs seeds 0, 1 and 2 by default and saves `step4_overfitting.png` and `step4_noise.png`, showing the mean across seeds. |
 
 ### Side experiments
 
@@ -34,7 +34,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Step 1 and the side experiments need only NumPy. Steps 2–4 also need PyTorch, and steps 3 and 4 use matplotlib for their charts. On a 20-core CPU, step 3 takes about 1.5 minutes and step 4 about 3 minutes.
+Step 1 and the side experiments need only NumPy. Steps 2–4 also need PyTorch, and steps 3 and 4 use matplotlib for their charts. On a 20-core CPU, step 3 takes about 1.5 minutes and step 4 about 9 minutes (three seeds; `--seeds 0` runs one in about 3 minutes).
 
 ## Key idea
 
@@ -110,7 +110,7 @@ In `extras/einsum_vs_loops.py`, `np.einsum` was about 37× faster than plain loo
 
 ## What steps 3 and 4 found
 
-All runs search for rank-7 algorithms from 200 random starting points. "Exact" means the rounded U, V, W rebuild the target tensor exactly, so the algorithm is correct for every pair of 2×2 matrices. Ranges cover the random seeds that were checked (2–3 per result).
+All runs search for rank-7 algorithms from 200 random starting points. "Exact" means the rounded U, V, W rebuild the target tensor exactly, so the algorithm is correct for every pair of 2×2 matrices. Ranges cover random seeds 0, 1 and 2, and the step 4 charts show their mean with the min–max range.
 
 **Regularisation decides whether you get an algorithm at all.** Without the whole-number penalty, no run found an exact algorithm, with or without ERM, on any seed. Many real-valued solutions fit perfectly (scale one column up and another down), so plain fitting stops at messy points that rounding breaks.
 
@@ -120,7 +120,7 @@ All runs search for rank-7 algorithms from 200 random starting points. "Exact" m
 | ERM, N = 32 or 64 pairs | 0 | 53–80 |
 | True risk (no ERM) | 0 | 68–83 |
 
-**ERM overfits below 16 pairs.** With 4–12 training pairs, up to 175 of 200 unregularised runs fitted the training pairs perfectly, yet none worked on new matrices (seed 0). The error is a bilinear map with 16 degrees of freedom per output entry, so fewer pairs can't pin down the algorithm. With enough pairs, ERM performs about as well as the true risk.
+**ERM overfits below 16 pairs.** With 4–12 training pairs, up to 175 of 200 unregularised runs fitted the training pairs perfectly, yet none worked on new matrices, on every seed. The error is a bilinear map with 16 degrees of freedom per output entry, so fewer pairs can't pin down the algorithm. With enough pairs, ERM performs about as well as the true risk.
 
 **RMSprop finds the most algorithms, and the most precise fit doesn't win.** With the regularised true risk, each at its best learning rate:
 
@@ -128,7 +128,7 @@ All runs search for rank-7 algorithms from 200 random starting points. "Exact" m
 |---|---|---|---|
 | RMSprop | 0.03 | 177–187 | 198 |
 | Adam | 0.1 | 167–170 | 197–199 |
-| Momentum | 0.003 | 95–110 | 93 |
+| Momentum | 0.003 | 95–110 | 93–98 |
 | Plain GD | 0.1 | 91–98 | diverges |
 
 Momentum fits the loss most precisely but finds about half as many algorithms as RMSprop, which never fits below 1e-4. Gradient noise helps the adaptive optimisers and breaks plain gradient descent. Why RMSprop does best is still an open question; one guess is that its evenly sized steps keep it from settling at messy points.
